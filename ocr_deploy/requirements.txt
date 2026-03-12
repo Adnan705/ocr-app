@@ -1,0 +1,25 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# requirements.txt — OCR Web App (Railway deployment)
+# Note: torch + torchvision are installed separately in Dockerfile
+#       to use the smaller CPU-only wheels.
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Web framework
+flask>=3.0.0
+flask-cors>=4.0.0
+gunicorn>=21.2.0
+
+# Image processing
+opencv-python-headless>=4.9.0   # headless = no GUI deps (smaller Docker image)
+Pillow>=10.2.0
+numpy>=1.26.0
+
+# OCR backends
+easyocr>=1.7.1
+pytesseract>=0.3.10
+
+# Optional spell-check
+pyspellchecker>=0.7.3
+
+# Utilities
+werkzeug>=3.0.0

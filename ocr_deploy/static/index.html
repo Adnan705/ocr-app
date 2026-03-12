@@ -1,0 +1,742 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>OCR Engine — Image to Text</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=Syne:wght@400;600;800&display=swap" rel="stylesheet">
+<style>
+  /* ── Reset & Base ─────────────────────────────────────────────────────── */
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --bg:        #0a0a0a;
+    --surface:   #111111;
+    --border:    #222222;
+    --border2:   #2e2e2e;
+    --accent:    #e8ff47;
+    --accent2:   #ff6b35;
+    --text:      #f0f0f0;
+    --muted:     #555;
+    --mono:      'Space Mono', monospace;
+    --sans:      'Syne', sans-serif;
+    --radius:    4px;
+    --transition: 0.18s cubic-bezier(0.4,0,0.2,1);
+  }
+
+  html { scroll-behavior: smooth; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--sans);
+    min-height: 100vh;
+    overflow-x: hidden;
+  }
+
+  /* ── Noise texture overlay ────────────────────────────────────────────── */
+  body::before {
+    content: '';
+    position: fixed; inset: 0; z-index: 0;
+    background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)' opacity='0.04'/%3E%3C/svg%3E");
+    pointer-events: none;
+    opacity: 0.6;
+  }
+
+  /* ── Layout ───────────────────────────────────────────────────────────── */
+  .wrap {
+    position: relative; z-index: 1;
+    max-width: 980px;
+    margin: 0 auto;
+    padding: 0 24px 80px;
+  }
+
+  /* ── Header ───────────────────────────────────────────────────────────── */
+  header {
+    padding: 48px 0 36px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: flex-end;
+    justify-content: space-between;
+    gap: 24px;
+    flex-wrap: wrap;
+  }
+
+  .logo {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+  }
+
+  .logo-mark {
+    width: 44px; height: 44px;
+    border: 2px solid var(--accent);
+    display: grid;
+    place-items: center;
+    position: relative;
+    flex-shrink: 0;
+  }
+
+  .logo-mark::after {
+    content: '';
+    position: absolute;
+    inset: 4px;
+    border: 1px solid var(--accent);
+    opacity: 0.4;
+  }
+
+  .logo-mark svg { width: 20px; height: 20px; fill: var(--accent); }
+
+  .logo-text h1 {
+    font-family: var(--sans);
+    font-weight: 800;
+    font-size: 1.5rem;
+    letter-spacing: -0.02em;
+    line-height: 1;
+    color: var(--text);
+  }
+
+  .logo-text p {
+    font-family: var(--mono);
+    font-size: 0.65rem;
+    color: var(--muted);
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    margin-top: 4px;
+  }
+
+  .header-meta {
+    font-family: var(--mono);
+    font-size: 0.65rem;
+    color: var(--muted);
+    letter-spacing: 0.08em;
+    text-align: right;
+    line-height: 1.8;
+  }
+
+  .header-meta span { color: var(--accent); }
+
+  /* ── Main grid ────────────────────────────────────────────────────────── */
+  .grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 1px;
+    background: var(--border);
+    margin-top: 1px;
+    border: 1px solid var(--border);
+  }
+
+  .panel {
+    background: var(--bg);
+    padding: 28px;
+    min-height: 520px;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .panel-label {
+    font-family: var(--mono);
+    font-size: 0.6rem;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin-bottom: 20px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+
+  .panel-label::before {
+    content: '';
+    display: inline-block;
+    width: 6px; height: 6px;
+    background: var(--accent);
+  }
+
+  /* ── Drop zone ────────────────────────────────────────────────────────── */
+  .dropzone {
+    flex: 1;
+    border: 1px dashed var(--border2);
+    border-radius: var(--radius);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 16px;
+    cursor: pointer;
+    transition: border-color var(--transition), background var(--transition);
+    position: relative;
+    overflow: hidden;
+    min-height: 300px;
+  }
+
+  .dropzone:hover,
+  .dropzone.dragover {
+    border-color: var(--accent);
+    background: rgba(232,255,71,0.025);
+  }
+
+  .dropzone.has-image { border-style: solid; border-color: var(--border2); }
+
+  .dropzone input[type="file"] {
+    position: absolute; inset: 0;
+    opacity: 0; cursor: pointer; width: 100%; height: 100%;
+  }
+
+  .drop-icon {
+    width: 48px; height: 48px;
+    border: 1px solid var(--border2);
+    border-radius: 50%;
+    display: grid;
+    place-items: center;
+    transition: border-color var(--transition);
+  }
+
+  .dropzone:hover .drop-icon { border-color: var(--accent); }
+
+  .drop-icon svg { width: 20px; height: 20px; stroke: var(--muted); }
+  .dropzone:hover .drop-icon svg { stroke: var(--accent); }
+
+  .drop-hint {
+    font-family: var(--mono);
+    font-size: 0.7rem;
+    color: var(--muted);
+    text-align: center;
+    line-height: 1.8;
+  }
+
+  .drop-hint strong { color: var(--text); font-weight: 700; }
+
+  #preview-img {
+    position: absolute; inset: 0;
+    width: 100%; height: 100%;
+    object-fit: contain;
+    padding: 12px;
+    display: none;
+  }
+
+  #preview-img.visible { display: block; }
+
+  .preview-overlay {
+    position: absolute; inset: 0;
+    background: rgba(0,0,0,0.55);
+    display: none;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    font-family: var(--mono);
+    font-size: 0.65rem;
+    color: var(--text);
+    letter-spacing: 0.1em;
+    backdrop-filter: blur(2px);
+  }
+
+  .dropzone:hover .preview-overlay { display: flex; }
+
+  .preview-overlay svg { width: 24px; height: 24px; stroke: var(--accent); margin-bottom: 4px; }
+
+  /* ── Settings bar ─────────────────────────────────────────────────────── */
+  .settings {
+    margin-top: 16px;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+  }
+
+  .field { display: flex; flex-direction: column; gap: 5px; }
+
+  .field label {
+    font-family: var(--mono);
+    font-size: 0.58rem;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--muted);
+  }
+
+  .field select,
+  .field input {
+    background: var(--surface);
+    border: 1px solid var(--border2);
+    border-radius: var(--radius);
+    color: var(--text);
+    font-family: var(--mono);
+    font-size: 0.72rem;
+    padding: 7px 10px;
+    outline: none;
+    appearance: none;
+    transition: border-color var(--transition);
+    width: 100%;
+  }
+
+  .field select:focus,
+  .field input:focus { border-color: var(--accent); }
+
+  /* ── Run button ───────────────────────────────────────────────────────── */
+  .btn-run {
+    margin-top: 14px;
+    width: 100%;
+    background: var(--accent);
+    color: #0a0a0a;
+    border: none;
+    border-radius: var(--radius);
+    font-family: var(--mono);
+    font-size: 0.75rem;
+    font-weight: 700;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    padding: 13px 20px;
+    cursor: pointer;
+    transition: background var(--transition), transform var(--transition), opacity var(--transition);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+  }
+
+  .btn-run:hover:not(:disabled) { background: #d4eb3a; transform: translateY(-1px); }
+  .btn-run:active:not(:disabled) { transform: translateY(0); }
+  .btn-run:disabled { opacity: 0.45; cursor: not-allowed; }
+
+  .btn-run .spinner {
+    width: 14px; height: 14px;
+    border: 2px solid rgba(0,0,0,0.3);
+    border-top-color: #0a0a0a;
+    border-radius: 50%;
+    animation: spin 0.7s linear infinite;
+    display: none;
+  }
+
+  .btn-run.loading .spinner { display: block; }
+  .btn-run.loading .btn-label { display: none; }
+
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  /* ── Output panel ─────────────────────────────────────────────────────── */
+  .output-panel {
+    flex: 1;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    min-height: 300px;
+  }
+
+  .output-toolbar {
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    flex-shrink: 0;
+  }
+
+  .output-toolbar-left {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-family: var(--mono);
+    font-size: 0.6rem;
+    color: var(--muted);
+    letter-spacing: 0.08em;
+  }
+
+  #status-dot {
+    width: 6px; height: 6px; border-radius: 50%;
+    background: var(--muted);
+    transition: background 0.3s;
+    flex-shrink: 0;
+  }
+
+  #status-dot.active  { background: var(--accent); box-shadow: 0 0 6px var(--accent); }
+  #status-dot.error   { background: var(--accent2); box-shadow: 0 0 6px var(--accent2); }
+
+  .btn-copy {
+    background: transparent;
+    border: 1px solid var(--border2);
+    border-radius: var(--radius);
+    color: var(--muted);
+    font-family: var(--mono);
+    font-size: 0.6rem;
+    letter-spacing: 0.08em;
+    padding: 4px 10px;
+    cursor: pointer;
+    transition: color var(--transition), border-color var(--transition);
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .btn-copy:hover { color: var(--accent); border-color: var(--accent); }
+  .btn-copy svg { width: 10px; height: 10px; stroke: currentColor; }
+
+  .output-text {
+    flex: 1;
+    padding: 18px;
+    font-family: var(--mono);
+    font-size: 0.78rem;
+    line-height: 1.9;
+    color: var(--text);
+    white-space: pre-wrap;
+    word-break: break-word;
+    overflow-y: auto;
+    outline: none;
+  }
+
+  .output-text:empty::before {
+    content: attr(data-placeholder);
+    color: var(--muted);
+    font-style: normal;
+    opacity: 0.5;
+  }
+
+  /* ── Stats bar ────────────────────────────────────────────────────────── */
+  .stats {
+    margin-top: 16px;
+    display: flex;
+    gap: 1px;
+    background: var(--border);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    overflow: hidden;
+    opacity: 0;
+    transition: opacity 0.4s;
+  }
+
+  .stats.visible { opacity: 1; }
+
+  .stat {
+    flex: 1;
+    background: var(--surface);
+    padding: 10px 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+  }
+
+  .stat-label {
+    font-family: var(--mono);
+    font-size: 0.55rem;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--muted);
+  }
+
+  .stat-val {
+    font-family: var(--mono);
+    font-size: 0.85rem;
+    font-weight: 700;
+    color: var(--accent);
+  }
+
+  /* ── Error state ──────────────────────────────────────────────────────── */
+  .error-msg {
+    padding: 12px 16px;
+    background: rgba(255,107,53,0.08);
+    border: 1px solid rgba(255,107,53,0.25);
+    border-radius: var(--radius);
+    font-family: var(--mono);
+    font-size: 0.7rem;
+    color: var(--accent2);
+    margin-top: 12px;
+    display: none;
+    line-height: 1.6;
+  }
+
+  .error-msg.visible { display: block; }
+
+  /* ── Responsive ───────────────────────────────────────────────────────── */
+  @media (max-width: 700px) {
+    .grid { grid-template-columns: 1fr; }
+    .settings { grid-template-columns: 1fr; }
+    header { flex-direction: column; align-items: flex-start; }
+    .header-meta { text-align: left; }
+  }
+
+  /* ── Animations ───────────────────────────────────────────────────────── */
+  @keyframes fadeUp {
+    from { opacity: 0; transform: translateY(16px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
+
+  header { animation: fadeUp 0.5s ease both; }
+  .grid  { animation: fadeUp 0.5s 0.1s ease both; }
+
+  /* ── Scrollbar ────────────────────────────────────────────────────────── */
+  ::-webkit-scrollbar { width: 4px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: var(--border2); border-radius: 2px; }
+
+</style>
+</head>
+<body>
+
+<div class="wrap">
+
+  <!-- ── Header ─────────────────────────────────────────────────────────── -->
+  <header>
+    <div class="logo">
+      <div class="logo-mark">
+        <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+          <path d="M3 5h18M3 10h18M3 15h12M3 20h8"/>
+          <!-- scan line -->
+          <path d="M18 14l2 2-2 2M22 16h-6" stroke="#e8ff47" stroke-width="1.5" fill="none" stroke-linecap="round"/>
+        </svg>
+      </div>
+      <div class="logo-text">
+        <h1>OCR Engine</h1>
+        <p>Image → Text Extraction</p>
+      </div>
+    </div>
+    <div class="header-meta">
+      Open-source · No paid APIs<br>
+      EasyOCR <span>+</span> EAST <span>+</span> OpenCV
+    </div>
+  </header>
+
+  <!-- ── Main grid ──────────────────────────────────────────────────────── -->
+  <div class="grid">
+
+    <!-- Left: upload + settings -->
+    <div class="panel">
+      <div class="panel-label">Input Image</div>
+
+      <div class="dropzone" id="dropzone">
+        <input type="file" id="file-input" accept=".jpg,.jpeg,.png,.bmp,.tiff,.webp" />
+        <img id="preview-img" alt="preview" />
+
+        <!-- Empty state -->
+        <div class="drop-hint" id="drop-hint">
+          <div class="drop-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+              <polyline points="17 8 12 3 7 8"/>
+              <line x1="12" y1="3" x2="12" y2="15"/>
+            </svg>
+          </div>
+          <strong>Drop image here</strong><br>
+          or click to browse<br>
+          JPG · PNG · BMP · TIFF · WEBP
+        </div>
+
+        <!-- Hover overlay when image loaded -->
+        <div class="preview-overlay" id="preview-overlay">
+          <svg viewBox="0 0 24 24" fill="none" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
+            <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
+          </svg>
+          Change image
+        </div>
+      </div>
+
+      <!-- Settings -->
+      <div class="settings">
+        <div class="field">
+          <label>Detection</label>
+          <select id="detect-method">
+            <option value="contour">Contour (fast)</option>
+            <option value="east">EAST (deep learning)</option>
+            <option value="auto">Auto</option>
+          </select>
+        </div>
+        <div class="field">
+          <label>OCR Backend</label>
+          <select id="ocr-backend">
+            <option value="auto">Auto</option>
+            <option value="easyocr">EasyOCR</option>
+            <option value="tesseract">Tesseract</option>
+          </select>
+        </div>
+        <div class="field" style="grid-column: 1 / -1;">
+          <label>Languages (comma-separated)</label>
+          <input type="text" id="languages" value="en" placeholder="en, fr, de …" />
+        </div>
+      </div>
+
+      <button class="btn-run" id="run-btn" disabled>
+        <div class="spinner"></div>
+        <span class="btn-label">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="display:inline;vertical-align:middle;margin-right:6px"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+          Run OCR
+        </span>
+      </button>
+
+      <div class="error-msg" id="error-msg"></div>
+    </div>
+
+    <!-- Right: output -->
+    <div class="panel">
+      <div class="panel-label">Extracted Text</div>
+
+      <div class="output-panel">
+        <div class="output-toolbar">
+          <div class="output-toolbar-left">
+            <div id="status-dot"></div>
+            <span id="status-label">Waiting for input</span>
+          </div>
+          <button class="btn-copy" id="copy-btn" title="Copy to clipboard">
+            <svg viewBox="0 0 24 24" fill="none" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+              <rect x="9" y="9" width="13" height="13" rx="2" ry="2"/>
+              <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
+            </svg>
+            Copy
+          </button>
+        </div>
+        <div
+          class="output-text"
+          id="output-text"
+          contenteditable="true"
+          spellcheck="false"
+          data-placeholder="Extracted text will appear here …"
+        ></div>
+      </div>
+
+      <!-- Stats row -->
+      <div class="stats" id="stats-row">
+        <div class="stat">
+          <div class="stat-label">Regions</div>
+          <div class="stat-val" id="stat-regions">—</div>
+        </div>
+        <div class="stat">
+          <div class="stat-label">Words</div>
+          <div class="stat-val" id="stat-words">—</div>
+        </div>
+        <div class="stat">
+          <div class="stat-label">Chars</div>
+          <div class="stat-val" id="stat-chars">—</div>
+        </div>
+        <div class="stat">
+          <div class="stat-label">Time</div>
+          <div class="stat-val" id="stat-time">—</div>
+        </div>
+        <div class="stat">
+          <div class="stat-label">Table</div>
+          <div class="stat-val" id="stat-table">—</div>
+        </div>
+      </div>
+    </div>
+
+  </div><!-- /.grid -->
+
+</div><!-- /.wrap -->
+
+<script>
+(() => {
+  const dropzone   = document.getElementById('dropzone');
+  const fileInput  = document.getElementById('file-input');
+  const previewImg = document.getElementById('preview-img');
+  const dropHint   = document.getElementById('drop-hint');
+  const prevOver   = document.getElementById('preview-overlay');
+  const runBtn     = document.getElementById('run-btn');
+  const errorMsg   = document.getElementById('error-msg');
+  const outputEl   = document.getElementById('output-text');
+  const statusDot  = document.getElementById('status-dot');
+  const statusLbl  = document.getElementById('status-label');
+  const copyBtn    = document.getElementById('copy-btn');
+  const statsRow   = document.getElementById('stats-row');
+
+  let currentFile = null;
+
+  // ── File handling ───────────────────────────────────────────────────────
+  function loadFile(file) {
+    if (!file || !file.type.startsWith('image/')) return;
+    currentFile = file;
+
+    const url = URL.createObjectURL(file);
+    previewImg.src = url;
+    previewImg.classList.add('visible');
+    dropHint.style.display = 'none';
+    prevOver.style.display = '';
+    dropzone.classList.add('has-image');
+    runBtn.disabled = false;
+
+    setStatus('idle', `${file.name}`);
+    errorMsg.classList.remove('visible');
+  }
+
+  fileInput.addEventListener('change', e => loadFile(e.target.files[0]));
+
+  dropzone.addEventListener('dragover', e => {
+    e.preventDefault();
+    dropzone.classList.add('dragover');
+  });
+  dropzone.addEventListener('dragleave', () => dropzone.classList.remove('dragover'));
+  dropzone.addEventListener('drop', e => {
+    e.preventDefault();
+    dropzone.classList.remove('dragover');
+    loadFile(e.dataTransfer.files[0]);
+  });
+
+  // ── Status helpers ──────────────────────────────────────────────────────
+  function setStatus(state, text) {
+    statusDot.className = state === 'active' ? 'active' :
+                          state === 'error'  ? 'error'  : '';
+    statusLbl.textContent = text;
+  }
+
+  // ── Run OCR ─────────────────────────────────────────────────────────────
+  runBtn.addEventListener('click', async () => {
+    if (!currentFile) return;
+
+    runBtn.disabled = true;
+    runBtn.classList.add('loading');
+    errorMsg.classList.remove('visible');
+    outputEl.textContent = '';
+    statsRow.classList.remove('visible');
+    setStatus('active', 'Processing …');
+
+    const form = new FormData();
+    form.append('image',          currentFile);
+    form.append('detect_method',  document.getElementById('detect-method').value);
+    form.append('ocr_backend',    document.getElementById('ocr-backend').value);
+    form.append('languages',      document.getElementById('languages').value);
+
+    try {
+      const res  = await fetch('/ocr', { method: 'POST', body: form });
+      const data = await res.json();
+
+      if (!res.ok || data.error) {
+        throw new Error(data.error || `Server error ${res.status}`);
+      }
+
+      outputEl.textContent = data.text || '(No text detected)';
+
+      // Stats
+      const words = data.text ? data.text.trim().split(/\s+/).filter(Boolean).length : 0;
+      document.getElementById('stat-regions').textContent = data.regions ?? '—';
+      document.getElementById('stat-words').textContent   = words;
+      document.getElementById('stat-chars').textContent   = data.text?.length ?? 0;
+      document.getElementById('stat-time').textContent    = data.elapsed_ms + ' ms';
+      document.getElementById('stat-table').textContent   = data.has_table ? 'Yes ⚠' : 'No';
+      statsRow.classList.add('visible');
+
+      setStatus('active', `Done — ${words} word${words !== 1 ? 's' : ''} extracted`);
+
+    } catch (err) {
+      setStatus('error', 'Error');
+      errorMsg.textContent = '⚠ ' + err.message;
+      errorMsg.classList.add('visible');
+    } finally {
+      runBtn.disabled = false;
+      runBtn.classList.remove('loading');
+    }
+  });
+
+  // ── Copy ────────────────────────────────────────────────────────────────
+  copyBtn.addEventListener('click', async () => {
+    const text = outputEl.textContent;
+    if (!text) return;
+    await navigator.clipboard.writeText(text);
+    const orig = copyBtn.innerHTML;
+    copyBtn.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg> Copied!`;
+    setTimeout(() => { copyBtn.innerHTML = orig; }, 1600);
+  });
+
+})();
+</script>
+</body>
+</html>
